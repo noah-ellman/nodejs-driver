@@ -9,6 +9,7 @@ var spawn = require('child_process').spawn;
 var Client = require('../lib/client');
 var defaultOptions = require('../lib/client-options').defaultOptions;
 var Host = require('../lib/host').Host;
+var OperationState = require('../lib/operation-state');
 
 
 util.inherits(RetryMultipleTimes, policies.retry.RetryPolicy);
@@ -673,6 +674,7 @@ var helper = {
       h.isUp = function () {
         return !(info.isUp === false);
       };
+      h.log = utils.noop;
       h.shouldBeIgnored = !!info.ignored;
       h.prepareCalled = 0;
       h.sendStreamCalled = 0;
@@ -694,7 +696,11 @@ var helper = {
             if (sendStreamCb) {
               return sendStreamCb(r, h, cb);
             }
-            cb(null, { });
+            var op = new OperationState(r, o, cb);
+            setImmediate(function () {
+              op.setResult(null, {});
+            });
+            return op;
           },
           changeKeyspace: function (ks, cb) {
             h.changeKeyspaceCalled++;
@@ -713,6 +719,9 @@ var helper = {
       },
       getFixedQueryPlan: function () {
         return hosts;
+      },
+      getDistance: function () {
+        return types.distance.local;
       }
     });
   },
