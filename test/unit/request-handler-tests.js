@@ -174,7 +174,35 @@ describe('RequestHandler', function () {
           done();
         });
       });
-      it('should callback in error when any of execution responses is an error that can be retried', function (done) {
+      it('should use the query plan to use next hosts as coordinators with zero delay', function (done) {
+        var lbp = helper.getLoadBalancingPolicyFake([ {}, {} ], undefined, function sendStreamCb(r, h, cb) {
+          var op = new OperationState(r, null, cb);
+          if (h.address !== '1') {
+            setTimeout(function () {
+              op.setResult(null, {});
+            }, 40);
+            return op;
+          }
+          op.setResult(null, {});
+          return op;
+        });
+        var client = newClient(null, lbp);
+        client.options.policies.speculativeExecution =
+          new speculativeExecution.ConstantSpeculativeExecutionPolicy(0, 2);
+        var handler = newInstance(queryRequest, client, lbp, null, true);
+        handler.send(function (err, result) {
+          assert.ifError(err);
+          helper.assertInstanceOf(result, types.ResultSet);
+          // Used the second host to get the response
+          assert.strictEqual(result.info.queriedHost, '1');
+          assert.deepEqual(Object.keys(result.info.triedHosts), [ '0', '1' ]);
+          var hosts = lbp.getFixedQueryPlan();
+          assert.strictEqual(hosts[0].sendStreamCalled, 1);
+          assert.strictEqual(hosts[1].sendStreamCalled, 1);
+          done();
+        });
+      });
+      it('should callback in error when any of execution responses is an error that cant be retried', function (done) {
         var lbp = helper.getLoadBalancingPolicyFake([ {}, {}, {}], undefined, function sendStreamCb(r, h, cb) {
           var op = new OperationState(r, null, cb);
           if (h.address !== '0') {

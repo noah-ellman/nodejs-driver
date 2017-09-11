@@ -1113,6 +1113,10 @@ function getPoolInfo(client) {
   return info;
 }
 
+/**
+ * Policy only suitable for testing, it creates a fixed query plan containing the nodes in the same order, ie: [a, b].
+ * @constructor
+ */
 function OrderedLoadBalancingPolicy() {
 
 }
