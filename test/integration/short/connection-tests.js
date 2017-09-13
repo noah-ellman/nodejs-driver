@@ -1,7 +1,6 @@
 "use strict";
 var assert = require('assert');
 
-var Connection = require('../../../lib/connection.js');
 var defaultOptions = require('../../../lib/client-options.js').defaultOptions();
 var utils = require('../../../lib/utils.js');
 var requests = require('../../../lib/requests.js');
@@ -14,7 +13,7 @@ describe('Connection', function () {
     before(helper.ccmHelper.start(1));
     after(helper.ccmHelper.remove);
     it('should open', function (done) {
-      var localCon = newInstance();
+      var localCon = helper.newConnection();
       localCon.open(function (err) {
         assert.ifError(err);
         assert.ok(localCon.connected, 'Must be status connected');
@@ -22,17 +21,17 @@ describe('Connection', function () {
       });
     });
     it('should use the max supported protocol version', function (done) {
-      var localCon = newInstance(null, null);
+      var localCon = helper.newConnection(null, null);
       localCon.open(function (err) {
         assert.ifError(err);
-        assert.strictEqual(localCon.protocolVersion, getProtocolVersion());
+        assert.strictEqual(localCon.protocolVersion, helper.getProtocolVersion());
         assert.strictEqual(localCon.checkingVersion, true);
         localCon.close(done);
       });
     });
     vit('3.0', 'should callback in error when protocol version is not supported server side', function (done) {
       // Attempting to connect with protocol v2
-      var localCon = newInstance(null, 2);
+      var localCon = helper.newConnection(null, 2);
       localCon.open(function (err) {
         helper.assertInstanceOf(err, Error);
         assert.ok(!localCon.connected);
@@ -42,8 +41,8 @@ describe('Connection', function () {
     });
     vit('2.0', 'should limit the max protocol version based on the protocolOptions', function (done) {
       var options = utils.extend({}, defaultOptions);
-      options.protocolOptions.maxVersion = getProtocolVersion() - 1;
-      var localCon = newInstance(null, null, options);
+      options.protocolOptions.maxVersion = helper.getProtocolVersion() - 1;
+      var localCon = helper.newConnection(null, null, options);
       localCon.open(function (err) {
         assert.ifError(err);
         assert.strictEqual(localCon.protocolVersion, options.protocolOptions.maxVersion);
@@ -52,7 +51,7 @@ describe('Connection', function () {
       });
     });
     it('should open with all the protocol versions supported', function (done) {
-      var maxProtocolVersionSupported = getProtocolVersion();
+      var maxProtocolVersionSupported = helper.getProtocolVersion();
       var minProtocolVersionSupported = getMinProtocolVersion();
       if(helper.getCassandraVersion()) {
         var protocolVersion = minProtocolVersionSupported - 1;
@@ -60,7 +59,7 @@ describe('Connection', function () {
       utils.whilst(function condition() {
         return (++protocolVersion) <= maxProtocolVersionSupported;
       }, function iterator (next) {
-        var localCon = newInstance(null, protocolVersion);
+        var localCon = helper.newConnection(null, protocolVersion);
         localCon.open(function (err) {
           assert.ifError(err);
           assert.ok(localCon.connected, 'Must be status connected');
@@ -69,7 +68,7 @@ describe('Connection', function () {
       }, done);
     });
     it('should fail when the host does not exits', function (done) {
-      var localCon = newInstance('1.1.1.1');
+      var localCon = helper.newConnection('1.1.1.1');
       localCon.open(function (err) {
         assert.ok(err, 'Must return a connection error');
         assert.ok(!localCon.connected);
@@ -77,7 +76,7 @@ describe('Connection', function () {
       });
     });
     it('should fail when the host exists but port closed', function (done) {
-      var localCon = newInstance('127.0.0.1:8090');
+      var localCon = helper.newConnection('127.0.0.1:8090');
       localCon.open(function (err) {
         assert.ok(err, 'Must return a connection error');
         assert.ok(!localCon.connected);
@@ -87,7 +86,7 @@ describe('Connection', function () {
     it('should set the timeout for the hearbeat', function (done) {
       var options = utils.extend({}, defaultOptions);
       options.pooling.heartBeatInterval = 200;
-      var c = newInstance(null, undefined, options);
+      var c = helper.newConnection(null, undefined, options);
       var sendCounter = 0;
       c.open(function (err) {
         assert.ifError(err);
@@ -110,7 +109,7 @@ describe('Connection', function () {
     before(helper.ccmHelper.start(1, {ssl: true}));
     after(helper.ccmHelper.remove);
     it('should open to a ssl enabled host', function (done) {
-      var localCon = newInstance();
+      var localCon = helper.newConnection();
       localCon.options.sslOptions = {};
       localCon.open(function (err) {
         assert.ifError(err);
@@ -128,7 +127,7 @@ describe('Connection', function () {
     before(helper.ccmHelper.start(1));
     after(helper.ccmHelper.remove);
     it('should change active keyspace', function (done) {
-      var localCon = newInstance();
+      var localCon = helper.newConnection();
       var keyspace = helper.getRandomName();
       utils.series([
         localCon.open.bind(localCon),
@@ -146,7 +145,7 @@ describe('Connection', function () {
       ], done);
     });
     it('should be case sensitive', function (done) {
-      var localCon = newInstance();
+      var localCon = helper.newConnection();
       var keyspace = helper.getRandomName().toUpperCase();
       assert.notStrictEqual(keyspace, keyspace.toLowerCase());
       utils.series([
@@ -172,7 +171,7 @@ describe('Connection', function () {
       var options = utils.extend({}, defaultOptions);
       options.socketOptions.readTimeout = 0;
       options.policies.retry = new helper.RetryMultipleTimes(3);
-      var connection = newInstance(null, null, options);
+      var connection = helper.newConnection(null, null, options);
       var maxRequests = connection.protocolVersion < 3 ? 128 : Math.pow(2, 15);
       utils.series([
         connection.open.bind(connection),
@@ -188,7 +187,7 @@ describe('Connection', function () {
       var options = utils.extend({}, defaultOptions);
       options.socketOptions.readTimeout = 0;
       options.policies.retry = new helper.RetryMultipleTimes(3);
-      var connection = newInstance(null, null, options);
+      var connection = helper.newConnection(null, null, options);
       var maxRequests = connection.protocolVersion < 3 ? 128 : Math.pow(2, 15);
       var killed = false;
       utils.series([
@@ -216,39 +215,8 @@ describe('Connection', function () {
   });
 });
 
-/** @returns {Connection} */
-function newInstance(address, protocolVersion, options){
-  if (!address) {
-    address = helper.baseOptions.contactPoints[0];
-  }
-  if (typeof protocolVersion === 'undefined') {
-    protocolVersion = getProtocolVersion();
-  }
-  //var logEmitter = function (name, type) { if (type === 'verbose') { return; } console.log.apply(console, arguments);};
-  options = utils.deepExtend({logEmitter: helper.noop}, options || defaultOptions);
-  return new Connection(address + ':' + options.protocolOptions.port, protocolVersion, options);
-}
-
 function getRequest(query) {
   return new requests.QueryRequest(query, null, null);
-}
-
-/**
- * Gets the max supported protocol version for the current Cassandra version
- * @returns {number}
- */
-function getProtocolVersion() {
-  //expected protocol version
-  if (helper.getCassandraVersion().indexOf('2.1.') === 0) {
-    return 3;
-  }
-  if (helper.getCassandraVersion().indexOf('2.0.') === 0) {
-    return 2;
-  }
-  if (helper.getCassandraVersion().indexOf('1.') === 0) {
-    return 1;
-  }
-  return 4;
 }
 
 /**
@@ -264,5 +232,5 @@ function getMinProtocolVersion() {
     || helper.getCassandraVersion().indexOf('1') === 0) {
     return 1;
   }
-  return getProtocolVersion() - 1;
+  return helper.getProtocolVersion() - 1;
 }
