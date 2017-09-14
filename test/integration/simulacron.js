@@ -401,15 +401,13 @@ SimulacronCluster.prototype.node = function() {
     // iterate over DCs and their nodes looking for first node that matches.
     for (var dcIndex = 0; dcIndex < this.dcs.length; dcIndex++) {
       var dc = this.dcs[dcIndex];
-      var node = dc.nodes.find(function (n) {
-        return n.address === args[0];
-      });
-
-      if (node) {
-        return node;
+      for (var nodeIndex = 0; nodeIndex < dc.nodes.length; nodeIndex++) {
+        var n = dc.nodes[nodeIndex];
+        if (n.address === args[0]) {
+          return n;
+        }
       }
     }
-    
     // node not found, raise error.
     throw new Error("No node found for " + args[0]);
   } else {
@@ -478,12 +476,11 @@ SimulacronDataCenter.prototype.node = function() {
   var args = arguments;
   // if the first argument is a string, assume its an address.
   if (typeof args[0] === "string") {
-    var node = this.nodes.find(function (n) {
-      return n.address === args[0];
-    });
-
-    if (node) {
-      return node;
+    for (var nodeIndex = 0; nodeIndex < this.nodes.length; nodeIndex++) {
+      var n = this.nodes[nodeIndex];
+      if (n.address === args[0]) {
+        return n;
+      }
     }
 
     // node not found, raise error.
