@@ -43,7 +43,7 @@ describe('Client', function () {
             sCluster.primeQueryWithEmptyResult(query, next);
           },
           function clearLog(next) {
-            sCluster.clearLog(next);
+            sCluster.clearLogs(next);
           }
         ], done);
     });
@@ -62,7 +62,7 @@ describe('Client', function () {
         assert.notEqual(result, null);
         assert.notEqual(result.rows, null);
         utils.eachSeries(client.hosts.values(), function(host, next) {
-          sCluster.queryNodeLog(host.address, function(logs) {
+          sCluster.node(host.address).getLogs(function(err, logs) {
             assert.ifError(err);
             var prepareQuery;
             for(var i = 0; i < logs.length; i++) {
@@ -85,7 +85,7 @@ describe('Client', function () {
       utils.series(
         [
           function stopLastNode(next) {
-            sCluster.stopNode(nodeDownAddress, next);
+            sCluster.node(nodeDownAddress).stop(next);
           },
           function runQuery(next) {
             utils.timesSeries(5, function (n, nextIteration) {
@@ -114,7 +114,7 @@ describe('Client', function () {
           },
           function verifyLogs(next) {
             utils.eachSeries(client.hosts.values(), function(host, nextHost) {
-              sCluster.queryNodeLog(host.address, function(logs) {
+              sCluster.node(host.address).getLogs(function(err, logs) {
                 var prepareQuery;
                 for(var i = 0; i < logs.length; i++) {
                   var queryLog = logs[i];
@@ -137,11 +137,11 @@ describe('Client', function () {
               helper.trace("Node marked as UP");
               setTimeout(next, 1000); //give time for driver to re prepare statement
             });
-            sCluster.resumeNode(nodeDownAddress, function() {
+            sCluster.node(nodeDownAddress).resume(function() {
             });
           },
           function verifyPrepareQueryOnLastNode(next) {
-            sCluster.queryNodeLog(nodeDownAddress, function(logs) {
+            sCluster.node(nodeDownAddress).getLogs(function(err, logs) {
               var prepareQuery;
               for(var i = 0; i < logs.length; i++) {
                 var queryLog = logs[i];
