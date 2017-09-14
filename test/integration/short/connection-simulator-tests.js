@@ -36,7 +36,7 @@ describe('Connection', function () {
             connection.open(next);
           },
           function clearLog(next) {
-            sCluster.clearLog(next);
+            sCluster.clearLogs(next);
           }
         ], done);
     });
@@ -68,7 +68,8 @@ describe('Connection', function () {
       utils.eachSeries(testRequests,
         function (req, nextRequest) {
           connection.sendStream(req.request, null, function() {
-            sCluster.queryNodeLog(sCluster.getContactPoints()[0], function (logs) {
+            sCluster.node(0).getLogs(function (err, logs) {
+              assert.ifError(err);
               assert.notEqual(logs, null);
               for (var i = 0; i < logs.length; i++) {
                 var queryLog = logs[i];
