@@ -2,7 +2,6 @@
 var assert = require('assert');
 var domain = require('domain');
 var dns = require('dns');
-var util = require('util');
 
 var helper = require('../../test-helper');
 var Client = require('../../../lib/client');
