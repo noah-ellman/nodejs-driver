@@ -178,7 +178,7 @@ function _makeRequest(options, callback) {
     });
     response.on('end', function() {
       if (statusCode >= 400) {
-        callback(err);
+        callback(body);
       } else if (body === '') {
         callback(null, {});
       } else {
