@@ -44,6 +44,15 @@ var simulacronHelper = {
 
     return p;
   },
+
+  /**
+   * Starts simulacron process.  Uses $SIMULACRON_PATH environemtn variable to determine the
+   * location of the simulacron jar.  If not set $HOME/simulacron.jar is tried instead.
+   * 
+   * Uses the starting ip range of 127.0.0.101.
+   * 
+   * @param {Function} cb Callback to be executed when completed, raised with Error if fails.
+   */
   start: function(cb) {
     var self = this;
     var simulacronJarPath = process.env['SIMULACRON_PATH'];
@@ -56,7 +65,7 @@ var simulacronHelper = {
     }
 
     var processName = 'java';
-    var params = ['-jar', simulacronJarPath, '--ip', '127.0.0.101'];
+    var params = ['-jar', simulacronJarPath, '--ip', self.startingIp, '-p', this.defaultPort];
     var initialized = false;
 
     var timeout = setTimeout(function() {
@@ -79,6 +88,12 @@ var simulacronHelper = {
       }
     });
   },
+
+  /**
+   * Stops the simulacron process if running.
+   *
+   * @param {Function} cb Callback to be executed when completed, raised with Error if fails.
+   */
   stop: function(cb) {
     if(this.sProcess !== undefined) {
       if(this.sProcess.exitCode) {
@@ -101,6 +116,16 @@ var simulacronHelper = {
       cb(Error('Process is not defined.'));
     }
   },
+
+  /**
+   * Convenience function for setting up simulacron, starting a simulated cluster and optionally creating a client instance
+   * that connects to it in before hooks.  Cleans up after itself in after hooks.
+   * 
+   * @param {Array} dcs array of nodes-per-dc configuration (i.e. 2,2,2 creates 3 2 node dcs)
+   * @param {Object} [options]
+   * @param {Object} [options.initClient] Determines whether to create a Client instance.
+   * @param {Object} [options.clientOptions] The options to use to initialize the client.
+   */
   setup: function (dcs, options) {
     var self = this;
     options = options || utils.emptyObject;
@@ -110,13 +135,13 @@ var simulacronHelper = {
     var client;
     before(function (done) {
       self.start(function () {
-        simulacronCluster.start(dcs, clientOptions, function() {
+        simulacronCluster.register(dcs, clientOptions, function() {
           done();
         });
       });
     });
     if (initClient) {
-      var baseOptions = { contactPoints: ['127.0.0.101'] };
+      var baseOptions = { contactPoints: [self.startingIp] };
       client = new Client(utils.extend({}, options.clientOptions, baseOptions));
       before(client.connect.bind(client));
       after(client.shutdown.bind(client));
@@ -138,36 +163,152 @@ var simulacronHelper = {
     };
   })(),
   baseAddress: 'localhost',
-  defaultPort: 8187,
+  startingIp: '127.0.0.101',
+  defaultPort: 8188,
   SimulacronCluster: SimulacronCluster
 };
 
-function makeRequest(options, callback) {
+function _makeRequest(options, callback) {
   var request = http.request(options, function(response) {
     // Continuously update stream with data
     var body = '';
+    var statusCode = response.statusCode;
     response.on('data', function(d) {
       body += d;
     });
     response.on('end', function() {
-      if (body === '') {
-        callback(null);
+      if (statusCode >= 400) {
+        callback(err);
+      } else if (body === '') {
+        callback(null, {});
       } else {
-        callback(JSON.parse(body));
+        callback(null, JSON.parse(body));
       }
     });
   });
   request.on('error', function(err) {
     helper.trace(err.message);
-    throw new Error(err);
+    callback(err);
   });
   return request;
 }
 
+/**
+ * Shared base class for cluster, data center and node types.
+ */
 function SimulacronTopic() {
   this.baseAddress = simulacronHelper.baseAddress;
   this.port = simulacronHelper.defaultPort; 
 }
+
+/**
+ * @returns {Array} query log entries for the given topic.
+ */
+SimulacronTopic.prototype.getLogs = function(callback) {
+  var self = this;
+  _makeRequest(this._getOptions('log', this.id, 'GET'), function(err, data) {
+    if (err) {
+      callback(err);
+    } else {
+      callback(err, self._filterLogs(data));
+    }
+  }).end();
+};
+
+/**
+ * Clears all query logs for a given topic.
+ */
+SimulacronTopic.prototype.clearLogs = function(callback) {
+  _makeRequest(this._getOptions('log', this.id, 'DELETE'), function(err, data) {
+    callback(err, data);
+  }).end();
+};
+
+/**
+ * Primes the given query.  All nodes associated with this topic will use this prime.
+ * 
+ * @param {Object} body Body for prime query, refer to simulacron documentation for more details.
+ */
+SimulacronTopic.prototype.prime = function(body, callback) {
+  var request = _makeRequest(this._getOptions('prime', this.id, 'POST'), function(err, data) {
+    callback(err, data);
+  });
+  request.write(JSON.stringify(body));
+  request.end();
+};
+
+/**
+ * Convenience method that primes the given query string with a simple successful response. 
+ * 
+ * @param {String} query Query string for prime query.
+ */
+SimulacronTopic.prototype.primeQuery = function(query, callback) {
+  this.prime({
+    when: {
+      query: query
+    },
+    then: {
+      result: "success"
+    }
+  }, callback);
+};
+
+/**
+ * Clear all primes associated with this topic.  Also clears primes for underlying members.
+ */
+SimulacronTopic.prototype.clearPrimes = function(callback) {
+  _makeRequest(this._getOptions('prime', this.id, 'DELETE'), function(err, data) {
+    callback(err, data);
+  }).end();
+};
+
+/**
+ * Clears all primes and activity logs associated with this topic.  Also clears data for underlying members.
+ */
+SimulacronTopic.prototype.clear = function(callback) {
+  var self = this;
+  utils.parallel([
+    self.clearPrimes.bind(self), 
+    self.clearLogs.bind(self)
+  ], callback);
+};
+
+/**
+ * Stops listening for connections and closes existing connections for all associated nodes.
+ */
+SimulacronTopic.prototype.stop = function(callback) {
+  var stopNodePath = '/listener/%s?type=stop';
+  var options = {
+    host: this.baseAddress,
+    path: encodeURI(util.format(stopNodePath, this.id)),
+    port: this.port,
+    method: 'DELETE'
+  };
+  _makeRequest(options, function(err, data) {
+    callback(err, data);
+  }).end();
+};
+
+/**
+ * Resume listening for connections for all associated nodes.
+ */
+SimulacronTopic.prototype.start = function(callback) {
+  var resumeNodePath = '/listener/%s';
+  var options = {
+    host: this.baseAddress,
+    path: encodeURI(util.format(resumeNodePath, this.id)),
+    port: this.port,
+    method: 'PUT'
+  };
+  _makeRequest(options, function(err, data) {
+    callback(err, data);
+  }).end();
+};
+
+SimulacronTopic.prototype._filterLogs = function(data) {
+  // TODO implement for cluster and dc.
+  return data;
+};
 
 SimulacronTopic.prototype._getPath = function (endpoint, id) {
   var path = '/' + endpoint + '/' + id;
@@ -184,117 +325,26 @@ SimulacronTopic.prototype._getOptions = function (endpoint, id, method) {
   };
 };
 
-SimulacronTopic.prototype.getLogs = function(callback) {
-  var self = this;
-  makeRequest(this._getOptions('log', this.id, 'GET'), function(data) {
-    callback(null, self._filterLogs(data));
-  }).end();
-};
-
-SimulacronTopic.prototype.clearLogs = function(callback) {
-  makeRequest(this._getOptions('log', this.id, 'DELETE'), function(data) {
-    callback(null, data);
-  }).end();
-};
-
-SimulacronTopic.prototype.primeQueryWithEmptyResult = function(queryStr, callback) {
-  this.prime({
-    when: {
-      query: queryStr
-    },
-    then: {
-      result: 'success',
-      delay_in_ms: 0,
-      rows: [],
-      column_types: {}
-    }
-  }, callback);
-};
-
-SimulacronTopic.prototype.prime = function(body, callback) {
-  var request = makeRequest(this._getOptions('prime', this.id, 'POST'), function(data) {
-    callback(null, data);
-  });
-  request.write(JSON.stringify(body));
-  request.end();
-};
-
-SimulacronTopic.prototype.clearPrimes = function(callback) {
-  makeRequest(this._getOptions('prime', this.id, 'DELETE'), function(data) {
-    callback(null, data);
-  }).end();
-};
-
-SimulacronTopic.prototype.clear = function(callback) {
-  var self = this;
-  utils.parallel([
-    self.clearPrimes.bind(self), 
-    self.clearLogs.bind(self)
-  ], callback);
-};
-
-SimulacronTopic.prototype.stop = function(callback) {
-  var stopNodePath = '/listener/%s?type=stop';
-  var options = {
-    host: this.baseAddress,
-    path: encodeURI(util.format(stopNodePath, this.id)),
-    port: this.port,
-    method: 'DELETE'
-  };
-  makeRequest(options, function(data) {
-    callback(data);
-  }).end();
-};
-
-SimulacronTopic.prototype.resume = function(callback) {
-  var resumeNodePath = '/listener/%s';
-  var options = {
-    host: this.baseAddress,
-    path: encodeURI(util.format(resumeNodePath, this.id)),
-    port: this.port,
-    method: 'PUT'
-  };
-  makeRequest(options, function(data) {
-    callback(data);
-  }).end();
-};
-
-SimulacronTopic.prototype._filterLogs = function(data) {
-  // TODO implement for cluster and dc.
-  return data;
-};
-
+/**
+ * Represents a cluster with its data center and node configurations.  Use start to initialize.
+ */
 function SimulacronCluster() {
   SimulacronTopic.call(this);
 }
 
 util.inherits(SimulacronCluster, SimulacronTopic);
 
-function SimulacronDataCenter(cluster, dc) {
-  SimulacronTopic.call(this);
-  this.cluster = cluster;
-  this.data = dc;
-  this.localId = dc.id;
-  this.id = cluster.id + '/' + dc.id;
-}
-
-util.inherits(SimulacronDataCenter, SimulacronTopic);
-
-function SimulacronNode(dc, node) {
-  SimulacronTopic.call(this);
-  this.dc = dc;
-  this.data = node;
-  this.localId = node.id;
-  this.id = dc.id + '/' + node.id;
-}
-
-util.inherits(SimulacronNode, SimulacronTopic);
-
-SimulacronTopic.prototype._filterLogs = function(data) {
-  return data.data_centers[0].nodes[0].queries;
-};
-
-SimulacronCluster.prototype.start = function(dcs, clientOptions, callback) {
+/**
+ * Registers and starts cluster with given dc configuration and options.
+ * 
+ * @param {Array} dcs array of nodes-per-dc configuration (i.e. 2,2,2 creates 3 2 node dcs)
+ * @param {Object} clientOptions Startup options
+ * @param {String} [options.cassandraVersion] Version of cassandra nodes should use. (default is helper.getCassandraVersion())
+ * @param {String} [options.dseVersion] Version of dse nodes should use. (default is unset)
+ * @param {Boolean} [options.clusterName] Name of the cluster. (default is 'testCluster')
+ * @param {Number} [options.numTokens] Number of tokens for each node. (default is 1)
+ */
+SimulacronCluster.prototype.register = function(dcs, clientOptions, callback) {
   var self = this;
   var createClusterPath = '/cluster?data_centers=%s&cassandra_version=%s&dse_version=%s&name=%s&activity_log=%s&num_tokens=%d';
 
@@ -310,73 +360,158 @@ SimulacronCluster.prototype.start = function(dcs, clientOptions, callback) {
     method: 'POST'
   };
 
-  makeRequest(requestOptions, function(data) {
+  _makeRequest(requestOptions, function(err, data) {
+    if (err) {
+      callback(err);
+    }
     self.name = data.name;
     self.id = data.id;
-    self.dcs = data.data_centers;
-    callback(null);
+    self.data = data;
+    self.dcs = data.data_centers.map(function(dc) {
+      return new SimulacronDataCenter(self, dc);
+    });
+    callback(err, self);
   }).end();
 };
 
-SimulacronCluster.prototype.destroy = function(callback) {
-  makeRequest(this._getOptions('cluster', this.id, 'DELETE'), function(data) {
-    callback();
+/**
+ * Unregisters and destroys this cluster instance from the server.
+ */
+SimulacronCluster.prototype.unregister = function(callback) {
+  _makeRequest(this._getOptions('cluster', this.id, 'DELETE'), function(err, data) {
+    callback(err, data);
   }).end();
 };
 
-// TODO implement cluster.dc and dc.node
 
+/**
+ * Finds a node in the cluster by its id or address.
+ * 
+ * @param {Number|String} id Identifier of node.  If Number, assumes the id of the node in the data center.
+ * If String, assumes an 'ip:port' designation and looks up node by address.
+ * @param {Number} id2 Second identifier.  If present, 'id' is assumed to be the data center id.  If not
+ * present, 'id' is assumed to be the node id or address.  If number is passed in for 'id', 0 is the assumed
+ * data center id.
+ * @returns {SimulacronNode} The node, if found.
+ */
 SimulacronCluster.prototype.node = function() {
   var args = arguments;
-  var dc;
-  var node;
+  // if the first argument is a string, assume its an address.
   if (typeof args[0] === "string") {
-    // assume by address - TODO replace impl.
-    var data = this.findNode(args[0]);
-    dc = new SimulacronDataCenter(this, this.dcs[data.dataCenterId]);
-    node = new SimulacronNode(dc, dc.data.nodes[data.nodeId]);
+    // iterate over DCs and their nodes looking for first node that matches.
+    for (var dcIndex = 0; dcIndex < this.dcs.length; dcIndex++) {
+      var dc = this.dcs[dcIndex];
+      var node = dc.nodes.find(function (n) {
+        return n.address === args[0];
+      });
+
+      if (node) {
+        return node;
+      }
+    }
+    
+    // node not found, raise error.
+    throw new Error("No node found for " + args[0]);
   } else {
     var dcId = 0;
     var nodeId;
+    // if only one argument provided, assume nodeId in 0th data center.
     if (args.length === 1) {
       nodeId = args[0];
     } else {
       dcId = args[0];
       nodeId = args[1];
     }
-    dc = new SimulacronDataCenter(this, this.dcs[dcId]);
-    node = new SimulacronNode(dc, dc.data.nodes[nodeId]);
-  }
-  return node;
-};
-
-SimulacronCluster.prototype.findNode = function(nodeAddress) {
-  var self = this;
-
-  function findInDc(dc) {
-    for (var nodeId = 0; nodeId < dc.nodes.length; nodeId++) {
-      if (dc.nodes[nodeId].address === nodeAddress) {
-        return {
-          nodeId: dc.nodes[nodeId].id,
-          dataCenterId: dc.id
-        };
-      }
-    }
-  }
- 
-  for(var dcIndex = 0; dcIndex < self.dcs.length; dcIndex++) {
-    var nodeFound = findInDc(self.dcs[dcIndex]);
-    if (nodeFound) {
-      return nodeFound;
-    }
+    dc = this.dcs[dcId];
+    return dc.node(nodeId);
   }
 };
 
+/**
+ * Finds a data center in the cluster by its id.
+ * 
+ * @param {Number} id Idenfitifer of the dc.
+ * @returns {SimulacronDataCenter} The data center, if found.
+ */
+SimulacronCluster.prototype.dc = function(id) {
+  return this.dcs[id];
+};
+
+/**
+ * @param {Number} dataCenterId The data center to return node addresses from, if not provided assumes 0.
+ * @returns {Array} Listing of addresses of the nodes in the input dc.
+ */
 SimulacronCluster.prototype.getContactPoints = function(dataCenterId) {
   var dcId = dataCenterId = typeof dataCenterId === 'undefined' ? 0 : dataCenterId;
   return this.dcs[dcId].nodes.map(function (node) {
     return node.address;
   });
+};
+
+/**
+ * Represents a data center with its associated node configurations. 
+ * @param {SimulacronCluster} cluster Parent cluster.
+ * @param {Object} dc json data from provision response.
+ */
+function SimulacronDataCenter(cluster, dc) {
+  SimulacronTopic.call(this);
+  this.cluster = cluster;
+  this.data = dc;
+  this.localId = dc.id;
+  this.id = cluster.id + '/' + dc.id;
+  var self = this;
+  this.nodes = dc.nodes.map(function(node) {
+    return new SimulacronNode(self, node);
+  });
+}
+
+util.inherits(SimulacronDataCenter, SimulacronTopic);
+
+/**
+ * Finds a node in the given data center by its id or address.
+ * 
+ * @param {Number|String} id Identifier of node.  If Number, assumes the id of the node in the data center.
+ * If String, assumes an 'ip:port' designation and looks up node by address.
+ * @returns {SimulacronNode} The node, if found.
+ */
+SimulacronDataCenter.prototype.node = function() {
+  var args = arguments;
+  // if the first argument is a string, assume its an address.
+  if (typeof args[0] === "string") {
+    var node = this.nodes.find(function (n) {
+      return n.address === args[0];
+    });
+
+    if (node) {
+      return node;
+    }
+
+    // node not found, raise error.
+    throw new Error("No node found for " + args[0] + " in dc " + this.localId);
+  } else {
+    var nodeId = args[0];
+    return this.nodes[nodeId];
+  }
+};
+
+/**
+ * Represents a node.
+ * @param {SimulacronDataCenter} dc Parent Data Center.
+ * @param {Object} node json data from provision response. 
+ */
+function SimulacronNode(dc, node) {
+  SimulacronTopic.call(this);
+  this.dc = dc;
+  this.data = node;
+  this.localId = node.id;
+  this.id = dc.id + '/' + node.id;
+  this.address = node.address;
+}
+
+util.inherits(SimulacronNode, SimulacronTopic);
+
+SimulacronNode.prototype._filterLogs = function(data) {
+  return data.data_centers[0].nodes[0].queries;
 };
 
 module.exports = simulacronHelper;

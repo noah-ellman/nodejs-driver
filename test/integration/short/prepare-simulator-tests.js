@@ -19,11 +19,11 @@ describe('Client', function () {
       simulacron.start(done);
     });
     beforeEach(function (done) {
+      sCluster = new simulacron.SimulacronCluster();
       utils.series(
         [
           function startCluster(next) {
-            sCluster = new simulacron.SimulacronCluster();
-            sCluster.start('5', {}, next);
+            sCluster.register([5], {}, next);
           },
           function connectCluster(next) {
             var poolingOptions = {};
@@ -39,17 +39,13 @@ describe('Client', function () {
             client.connect.bind(client);
             next();
           },
-          function primeQuery(next) {
-            sCluster.primeQueryWithEmptyResult(query, next);
-          },
-          function clearLog(next) {
-            sCluster.clearLogs(next);
-          }
+          helper.toTask(sCluster.clear, sCluster),
+          helper.toTask(sCluster.primeQuery, sCluster, query)
         ], done);
     });
     afterEach(function (done) {
       client.shutdown.bind(client);
-      sCluster.destroy(done);
+      sCluster.unregister(done);
     });
     after(function (done) {
       simulacron.stop(done);
@@ -137,7 +133,7 @@ describe('Client', function () {
               helper.trace("Node marked as UP");
               setTimeout(next, 1000); //give time for driver to re prepare statement
             });
-            sCluster.node(nodeDownAddress).resume(function() {
+            sCluster.node(nodeDownAddress).start(function() {
             });
           },
           function verifyPrepareQueryOnLastNode(next) {
