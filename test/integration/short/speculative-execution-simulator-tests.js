@@ -21,14 +21,23 @@ describe('Client', function() {
     var client = setupInfo.client;
     var cluster = setupInfo.cluster;
     var query = "select * from data";
-    
+    var node0;
+    var node1;
+    var node2;
+
+    before(function done() {
+      node0 = cluster.node(0);
+      node1 = cluster.node(1);
+      node2 = cluster.node(2);
+    });
+
     var assertQueryCount = queryCounter(query, cluster);
 
     it('should not start speculative executions if query is non-idempotent', function (done) {
       utils.series([
         function primeNode0(next) {
           // prime node 0 to respond at 3x delay.
-          cluster.prime('0/0', {
+          node0.prime({
             when: {
               query: query
             },
@@ -49,9 +58,9 @@ describe('Client', function() {
             assert.strictEqual(queriedHost.nodeId, 0);
            
             // Should have only sent request to node 0.
-            assertQueryCount(0, 1);
-            assertQueryCount(1, 0);
-            assertQueryCount(2, 0);
+            assertQueryCount(node0, 1);
+            assertQueryCount(node1, 0);
+            assertQueryCount(node2, 0);
             next();
           });
         }
@@ -61,7 +70,7 @@ describe('Client', function() {
       utils.series([
         function primeNode0(next) {
           // prime node 0 to respond at 3x delay.
-          cluster.prime('0/0', {
+          node0.prime({
             when: {
               query: query
             },
@@ -82,9 +91,9 @@ describe('Client', function() {
             assert.strictEqual(queriedHost.nodeId, 1);
 
             // Should have sent requests to node 0 and 1.
-            assertQueryCount(0, 1);
-            assertQueryCount(1, 1);
-            assertQueryCount(2, 0);
+            assertQueryCount(node0, 1);
+            assertQueryCount(node1, 1);
+            assertQueryCount(node2, 0);
             next();
           });
         }
@@ -115,9 +124,9 @@ describe('Client', function() {
             assert.strictEqual(queriedHost.nodeId, 0);
 
             // Should have sent requests to all nodes.
-            assertQueryCount(0, 1);
-            assertQueryCount(1, 1);
-            assertQueryCount(2, 1);
+            assertQueryCount(node0, 1);
+            assertQueryCount(node1, 1);
+            assertQueryCount(node2, 1);
             next();
           });
         }
@@ -127,7 +136,7 @@ describe('Client', function() {
       utils.series([
         function primeNode0(next) {
           // prime node 0 to respond at 3x delay.
-          cluster.prime('0/0', {
+          node0.prime({
             when: {
               query: query
             },
@@ -139,7 +148,7 @@ describe('Client', function() {
         },
         function primeNode1(next) {
           // prime node 1 to respond at 3x delay.
-          cluster.prime('0/1', {
+          node1.prime({
             when: {
               query: query
             },
@@ -160,9 +169,9 @@ describe('Client', function() {
             assert.strictEqual(queriedHost.nodeId, 2);
 
             // Should have sent requests to all nodes.
-            assertQueryCount(0, 1);
-            assertQueryCount(1, 1);
-            assertQueryCount(2, 1);
+            assertQueryCount(node0, 1);
+            assertQueryCount(node1, 1);
+            assertQueryCount(node2, 1);
             next();
           });
         }
@@ -172,7 +181,7 @@ describe('Client', function() {
       utils.series([
         function primeNode0(next) {
           // prime node 0 to respond with bootstrapping error (triggers retry on next node)
-          cluster.prime('0/0', {
+          node0.prime({
             when: {
               query: query
             },
@@ -197,9 +206,9 @@ describe('Client', function() {
             assert.strictEqual(code, responseErrorCodes.isBootstrapping, "Expected isBootstrapping");
 
             // Should have sent requests to two nodes.
-            assertQueryCount(0, 1);
-            assertQueryCount(1, 1);
-            assertQueryCount(2, 0);
+            assertQueryCount(node0, 1);
+            assertQueryCount(node1, 1);
+            assertQueryCount(node2, 0);
             next();
           });
         }
@@ -209,7 +218,7 @@ describe('Client', function() {
       utils.series([
         function primeNode0(next) {
           // prime node 0 to respond at 3x delay.
-          cluster.prime('0/0', {
+          node0.prime({
             when: {
               query: query
             },
@@ -221,7 +230,7 @@ describe('Client', function() {
         },
         function primeNode1(next) {
           // prime node 1 to respond with bootstrapping error (triggers retry on next node)
-          cluster.prime('0/1', {
+          node1.prime({
             when: {
               query: query
             },
@@ -246,9 +255,9 @@ describe('Client', function() {
             assert.strictEqual(code, responseErrorCodes.isBootstrapping, "Expected isBootstrapping");
 
             // Should have sent requests to all nodes.
-            assertQueryCount(0, 1);
-            assertQueryCount(1, 1);
-            assertQueryCount(2, 1);
+            assertQueryCount(node0, 1);
+            assertQueryCount(node1, 1);
+            assertQueryCount(node2, 1);
             next();
           });
         }
@@ -258,7 +267,7 @@ describe('Client', function() {
       utils.series([
         function primeNode0(next) {
           // prime node 0 to respond at 3x delay.
-          cluster.prime('0/0', {
+          node0.prime({
             when: {
               query: query
             },
@@ -270,7 +279,7 @@ describe('Client', function() {
         },
         function primeNode1(next) {
           // prime node 1 to respond with bootstrapping error (triggers retry on next node)
-          cluster.prime('0/1', {
+          node1.prime({
             when: {
               query: query
             },
@@ -281,7 +290,7 @@ describe('Client', function() {
         },
         function primeNode2(next) {
           // prime node 2 to respond with bootstrapping error (no more hosts to retry, so should wait for node 0)
-          cluster.prime('0/2', {
+          node2.prime({
             when: {
               query: query
             },
@@ -308,9 +317,9 @@ describe('Client', function() {
             });
 
             // Should have sent requests to all nodes.
-            assertQueryCount(0, 1);
-            assertQueryCount(1, 1);
-            assertQueryCount(2, 1);
+            assertQueryCount(node0, 1);
+            assertQueryCount(node1, 1);
+            assertQueryCount(node2, 1);
             next();
           });
         }
@@ -324,7 +333,7 @@ describe('Client', function() {
           // node 1: 2*delay
           // node 2: 1*delay
           utils.times(3, function(id, nextT) {
-            cluster.prime('0/' + id, {
+            cluster.node(id).prime({
               when: {
                 query: query
               },
@@ -348,9 +357,9 @@ describe('Client', function() {
             });
 
             // Should have sent requests to all nodes.
-            assertQueryCount(0, 1);
-            assertQueryCount(1, 1);
-            assertQueryCount(2, 1);
+            assertQueryCount(node0, 1);
+            assertQueryCount(node1, 1);
+            assertQueryCount(node2, 1);
             next();
           });
         }
@@ -369,7 +378,7 @@ describe('Client', function() {
         client.connect.bind(client),
         function primeNode0(next) {
           // prime node 0 to respond at 4x delay.
-          cluster.prime('0/0', {
+          node0.prime({
             when: {
               query: query
             },
@@ -381,7 +390,7 @@ describe('Client', function() {
         },
         function primeNode1(next) {
           // prime node 1 to respond at 4x delay.
-          cluster.prime('0/1', {
+          node1.prime({
             when: {
               query: query
             },
@@ -393,7 +402,7 @@ describe('Client', function() {
         },
         function primeNode2(next) {
           // prime node 2 to respond at 2x delay.
-          cluster.prime('0/2', {
+          node2.prime({
             when: {
               query: query
             },
@@ -414,9 +423,9 @@ describe('Client', function() {
             assert.strictEqual(queriedHost.nodeId, 2);
 
             // Should have sent requests to all nodes.
-            assertQueryCount(0, 1);
-            assertQueryCount(1, 1);
-            assertQueryCount(2, 1);
+            assertQueryCount(node0, 1);
+            assertQueryCount(node1, 1);
+            assertQueryCount(node2, 1);
             next();
           });
         },
@@ -429,20 +438,13 @@ describe('Client', function() {
 // TODO generalize this and move to simulacron.
 // Generates a function used for getting the number of times a query was received for a particular node.
 function queryCounter(query, cluster) {
-  return function (dcId, nodeId, expected) {
-    if (!expected) {
-      expected = nodeId;
-      nodeId = dcId;
-      dcId = 0;
-    }
-    var path = dcId + '/' + nodeId;
-    cluster.log(path, function(err, result) {
+  return function (node, expected) {
+    node.getLogs(function(err, queries) {
       assert.ifError(err);
-      var queries = result.data_centers[dcId].nodes[0].queries;
       var matches = queries.filter(function (el) {
         return el.query === query;
       });
-      assert.strictEqual(matches.length, expected, "For node " + path);
+      assert.strictEqual(matches.length, expected, "For node " + node.id);
     });
   };
 }
