@@ -5,6 +5,7 @@ var spawn = require('child_process').spawn;
 var util = require('util');
 var fs = require('fs');
 var utils = require('../../lib/utils.js');
+var Client = require('../../lib/client.js');
 
 var simulacronHelper = {
   _execute: function(processName, params, cb) {
@@ -100,6 +101,32 @@ var simulacronHelper = {
       cb(Error('Process is not defined.'));
     }
   },
+  setup: function (dcs, options) {
+    var self = this;
+    options = options || utils.emptyObject;
+    var clientOptions = options.clientOptions || {};
+    var simulacronCluster = new SimulacronCluster();
+    var initClient = options.initClient !== false;
+    var client;
+    before(function (done) {
+      self.start(function () {
+        simulacronCluster.start(dcs, clientOptions, function() {
+          done();
+        });
+      });
+    });
+    if (initClient) {
+      var baseOptions = { contactPoints: ['127.0.0.101'] };
+      client = new Client(utils.extend({}, options.clientOptions, baseOptions));
+      before(client.connect.bind(client));
+      after(client.shutdown.bind(client));
+    }
+    afterEach(simulacronCluster.clear.bind(simulacronCluster));
+    after(simulacronHelper.stop.bind(simulacronHelper));
+
+    var setupInfo = { cluster: simulacronCluster, client: client };
+    return setupInfo;
+  },
   baseOptions: (function () {
     return {
       //required
@@ -179,30 +206,54 @@ SimulacronCluster.prototype.destroy = function(callback) {
   }).end();
 };
 
-SimulacronCluster.prototype.clearLog = function(callback) {
+SimulacronCluster.prototype._getPath = function (endpoint, id) {
+  var path = '/' + endpoint + '/' + this.id;
+  if (id) {
+    path += '/' + id;
+  }
+  return encodeURI(path);
+};
+
+SimulacronCluster.prototype.log = function(id, callback) {
+  if (typeof id === 'function') {
+    callback = id;
+    id = undefined;
+  }
   var self = this;
-  var destroyClusterPath = '/log/%d';
   var options = {
     host: self.baseAddress,
-    path: encodeURI(util.format(destroyClusterPath, self.id)),
+    path: self._getPath('log', id),
+    port: self.port,
+    method: 'GET'
+  };
+  makeRequest(options, function(data) {
+    callback(null, data);
+  }).end();
+};
+
+SimulacronCluster.prototype.clearLog = function(id, callback) {
+  if (typeof id === 'function') {
+    callback = id;
+    id = undefined;
+  }
+  var self = this;
+  var options = {
+    host: self.baseAddress,
+    path: self._getPath('log', id),
     port: self.port,
     method: 'DELETE'
   };
   makeRequest(options, function(data) {
-    callback(null);
+    callback(null, data);
   }).end();
 };
 
-SimulacronCluster.prototype.primeQueryWithEmptyResult = function(queryStr, callback) {
-  var self = this;
-  var primeQueryPath = '/prime/%d';
-  var options = {
-    host: self.baseAddress,
-    path: encodeURI(util.format(primeQueryPath, self.id)),
-    port: self.port,
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' }
-  };
+SimulacronCluster.prototype.primeQueryWithEmptyResult = function(id, queryStr, callback) {
+  if (typeof queryStr === 'function') {
+    callback = queryStr;
+    queryStr = id;
+    id = undefined;
+  }
   var body = {
     when: {
       query: queryStr
@@ -214,11 +265,53 @@ SimulacronCluster.prototype.primeQueryWithEmptyResult = function(queryStr, callb
       column_types: {}
     }
   };
+  this.prime(id, body, callback);
+};
+
+SimulacronCluster.prototype.prime = function(id, body, callback) {
+  if (typeof body === 'function') {
+    callback = body;
+    body = id;
+    id = undefined;
+  }
+  var self = this;
+  var options = {
+    host: self.baseAddress,
+    path: self._getPath('prime', id),
+    port: self.port,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' }
+  };
   var request = makeRequest(options, function(data) {
-    callback();
+    callback(null, data);
   });
   request.write(JSON.stringify(body));
   request.end();
+};
+
+SimulacronCluster.prototype.clearPrimes = function(id, callback) {
+  if (typeof id === 'function') {
+    callback = id;
+    id = undefined;
+  }
+  var self = this;
+  var options = {
+    host: self.baseAddress,
+    path: self._getPath('prime', id),
+    port: self.port,
+    method: 'DELETE'
+  };
+  makeRequest(options, function(data) {
+    callback(null, data);
+  }).end();
+};
+
+SimulacronCluster.prototype.clear = function(callback) {
+  var self = this;
+  utils.parallel([
+    self.clearPrimes.bind(self), 
+    self.clearLog.bind(self)
+  ], callback);
 };
 
 SimulacronCluster.prototype.findNode = function(nodeAddress) {
